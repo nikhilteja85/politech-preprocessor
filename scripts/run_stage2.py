@@ -74,17 +74,36 @@ def load_plan(shp_path: str, chamber_code: str, state_info: dict, plan_year: int
     print(f"\nLoading {chamber_code} plan shapefile: {shp_path}")
     gdf = gpd.read_file(shp_path).to_crs(WORK_CRS)
 
-    # Expect DISTRICT, LONGNAME, SHORTNAME based on typical RDH format
-    for col in ["DISTRICT", "LONGNAME", "SHORTNAME"]:
-        if col not in gdf.columns:
-            print(f"Warning: Expected column '{col}' not found in plan shapefile {shp_path}")
-            print(f"Available columns: {list(gdf.columns)}")
-            # Try to find a district column with different name
-            district_cols = [c for c in gdf.columns if 'district' in c.lower() or 'dist' in c.lower()]
-            if district_cols and "DISTRICT" not in gdf.columns:
-                print(f"Using '{district_cols[0]}' as DISTRICT column")
-                gdf["DISTRICT"] = gdf[district_cols[0]]
+    # Map TIGER/RDH column names to standardized DISTRICT column
+    # TIGER congressional: CD119FP (for 119th Congress)
+    # TIGER state legislative lower: SLDLST
+    # TIGER state legislative upper: SLDUST
+    # RDH format: DISTRICT
+    
+    district_col_map = {
+        'DISTRICT': 'DISTRICT',  # Already standardized (RDH format)
+        'CD119FP': 'DISTRICT',   # TIGER congressional
+        'CD118FP': 'DISTRICT',   # TIGER congressional (118th Congress)
+        'CD117FP': 'DISTRICT',   # TIGER congressional (117th Congress)
+        'CD116FP': 'DISTRICT',   # TIGER congressional (116th Congress)
+        'SLDLST': 'DISTRICT',    # TIGER state legislative lower
+        'SLDUST': 'DISTRICT',    # TIGER state legislative upper
+    }
+    
+    # Find and map the district column
+    for tiger_col, std_col in district_col_map.items():
+        if tiger_col in gdf.columns:
+            if tiger_col != std_col:
+                print(f"Mapping '{tiger_col}' → 'DISTRICT'")
+                gdf['DISTRICT'] = gdf[tiger_col]
             break
+    
+    # If still no DISTRICT column, try generic pattern matching
+    if "DISTRICT" not in gdf.columns:
+        district_cols = [c for c in gdf.columns if 'district' in c.lower() or 'dist' in c.lower() or c.endswith('FP') or c.endswith('ST')]
+        if district_cols:
+            print(f"Using '{district_cols[0]}' as DISTRICT column")
+            gdf["DISTRICT"] = gdf[district_cols[0]]
 
     if "DISTRICT" not in gdf.columns:
         raise RuntimeError(
@@ -143,11 +162,19 @@ def build_assignments_for_plan(precincts: gpd.GeoDataFrame,
         if dist_code is None or (isinstance(dist_code, float) and pd.isna(dist_code)):
             continue  # skip unassigned
 
+        # Handle non-numeric district codes (e.g., 'ZZZ' for areas without defined districts)
+        try:
+            district_id = int(dist_code)
+        except (ValueError, TypeError):
+            # Use -1 for special codes like 'ZZZ' (districts not defined)
+            # This preserves the precinct in the data while marking it as special
+            district_id = -1
+
         assignments.append({
             "state": plan_meta["state"],
             "plan_id": plan_id,
             "precinct_id": precinct_row["UNIQUE_ID"],
-            "district_id": int(dist_code),
+            "district_id": district_id,
         })
 
     print(f"Built {len(assignments)} assignments for plan {plan_id}")
@@ -162,60 +189,75 @@ def main():
         stage_name="Stage 2"
     )
     
+    # Optional plan-year override
     parser.add_argument(
         "--plan-year",
         type=int,
-        default=2022,
-        help="Plan year for redistricting plans (default: 2022)"
+        default=None,
+        help="Plan year for redistricting plans (default: auto-detect from available plans)"
     )
     
     args = parser.parse_args()
 
     # Validate state and get configuration
-    state_info, state_paths = validate_state_setup(args.state)
+    state_info, state_paths = validate_state_setup(args.state, acs_year=args.acs_year, census_year=args.census_year)
     print_state_info(state_info)
 
     # 1. Load precincts from Stage 1 output
     precincts = load_precincts(state_paths["precinct_geojson"])
 
-    # 2. Find and load plans
+    # 2. Find and load plans (auto-detects year if not specified)
     try:
         plan_files = find_plan_shapefiles(state_paths["plans_dir"], state_info["abbr"], args.plan_year)
+        plan_year = plan_files['year']  # Get the detected/specified year
     except FileNotFoundError as e:
         print(f"\n❌ {e}")
         print(f"\n📁 Expected plan structure:")
         print(f"   inputs/plans/{state_info['abbr']}/")
-        print(f"   ├── {state_info['abbr']}_cong_adopted_{args.plan_year}/")
-        print(f"   │   └── [congressional_district_shapefile].shp")
-        print(f"   └── {state_info['abbr']}_sl_adopted_{args.plan_year}/")
-        print(f"       └── [legislative_district_shapefile].shp")
+        print(f"   ├── {state_info['abbr']}_cong_adopted_YYYY/       # Congressional districts")
+        print(f"   │   └── [shapefile].shp")
+        print(f"   ├── {state_info['abbr']}_sldl_adopted_YYYY/       # State Legislative Lower")
+        print(f"   │   └── [shapefile].shp")
+        print(f"   └── {state_info['abbr']}_sldu_adopted_YYYY/       # State Legislative Upper")
+        print(f"       └── [shapefile].shp")
+        print(f"\n   Note: Some states may use 'sl' instead of 'sldl'/'sldu' for unicameral legislatures")
         print(f"\nDownload plans from: https://redistrictingdatahub.org/")
         return
 
     all_plans = []
     all_assignments = []
     
-    # Process congressional plan
-    if "cong" in plan_files:
-        try:
-            cong_gdf, cong_meta = load_plan(plan_files["cong"], "CONG", state_info, args.plan_year)
-            cong_assignments, cong_unassigned = build_assignments_for_plan(precincts, cong_gdf, cong_meta)
-            all_plans.append(cong_meta)
-            all_assignments.extend(cong_assignments)
-            print(f"Congressional plan: {len(cong_assignments)} assignments, {cong_unassigned} unassigned")
-        except Exception as e:
-            print(f"⚠ Warning: Failed to process congressional plan: {e}")
+    # Chamber code mapping for display/metadata
+    chamber_codes = {
+        'cong': 'CONG',
+        'sl': 'SL',
+        'sldl': 'SLDL',
+        'sldu': 'SLDU'
+    }
     
-    # Process legislative plan
-    if "leg" in plan_files:
+    chamber_names = {
+        'cong': 'Congressional',
+        'sl': 'State Legislative',
+        'sldl': 'State Legislative Lower',
+        'sldu': 'State Legislative Upper'
+    }
+    
+    # Process all detected chambers dynamically
+    for chamber_key in plan_files:
+        if chamber_key == 'year':  # Skip the year metadata
+            continue
+            
+        chamber_code = chamber_codes.get(chamber_key, chamber_key.upper())
+        chamber_name = chamber_names.get(chamber_key, chamber_key.title())
+        
         try:
-            leg_gdf, leg_meta = load_plan(plan_files["leg"], "SL", state_info, args.plan_year)
-            leg_assignments, leg_unassigned = build_assignments_for_plan(precincts, leg_gdf, leg_meta)
-            all_plans.append(leg_meta)
-            all_assignments.extend(leg_assignments)
-            print(f"Legislative plan: {len(leg_assignments)} assignments, {leg_unassigned} unassigned")
+            plan_gdf, plan_meta = load_plan(plan_files[chamber_key], chamber_code, state_info, plan_year)
+            assignments, unassigned = build_assignments_for_plan(precincts, plan_gdf, plan_meta)
+            all_plans.append(plan_meta)
+            all_assignments.extend(assignments)
+            print(f"{chamber_name} plan: {len(assignments)} assignments, {unassigned} unassigned")
         except Exception as e:
-            print(f"⚠ Warning: Failed to process legislative plan: {e}")
+            print(f"⚠ Warning: Failed to process {chamber_name} plan: {e}")
 
     if not all_plans:
         print("❌ No plans were successfully processed.")
@@ -223,17 +265,42 @@ def main():
 
     print(f"\nTotal assignments created: {len(all_assignments)}")
 
-    # 3. Save JSON outputs
-    plans_json = state_paths["plans_json"].format(year=args.plan_year)
-    assignments_json = state_paths["assignments_json"].format(year=args.plan_year)
+    # 3. Save JSON outputs to centralized files (support appending)
+    plans_json = state_paths["plans_json"]
+    assignments_json = state_paths["assignments_json"]
     
+    # Load existing data or start with empty lists
+    existing_plans = []
+    existing_assignments = []
+    
+    if os.path.exists(plans_json):
+        with open(plans_json, "r") as f:
+            existing_plans = json.load(f)
+    
+    if os.path.exists(assignments_json):
+        with open(assignments_json, "r") as f:
+            existing_assignments = json.load(f)
+    
+    # Remove old entries for this state/year combination
+    existing_plans = [p for p in existing_plans 
+                      if not (p.get("state") == state_info["abbr"].upper() and p.get("year") == plan_year)]
+    existing_assignments = [a for a in existing_assignments 
+                           if not (a.get("state") == state_info["abbr"].upper() and a.get("year") == plan_year)]
+    
+    # Append new data
+    existing_plans.extend(all_plans)
+    existing_assignments.extend(all_assignments)
+    
+    # Save updated data
     with open(plans_json, "w") as f:
-        json.dump(all_plans, f, indent=2)
-    print(f"\n✅ Saved plans JSON: {plans_json}")
+        json.dump(existing_plans, f, indent=2)
+    print(f"\n✅ Saved plans to centralized JSON: {plans_json}")
+    print(f"   Total plans in file: {len(existing_plans)}")
 
     with open(assignments_json, "w") as f:
-        json.dump(all_assignments, f, indent=2)
-    print(f"✅ Saved assignments JSON: {assignments_json}")
+        json.dump(existing_assignments, f, indent=2)
+    print(f"✅ Saved assignments to centralized JSON: {assignments_json}")
+    print(f"   Total assignments in file: {len(existing_assignments)}")
     print(f"\nNext: Run stage 3 with -> python run_stage3_dots.py {args.state}")
 
 

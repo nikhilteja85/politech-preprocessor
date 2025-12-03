@@ -197,8 +197,15 @@ def main():
     args = parser.parse_args()
 
     # Validate state and get configuration
-    state_info, state_paths = validate_state_setup(args.state)
+    state_info, state_paths = validate_state_setup(args.state, acs_year=args.acs_year, census_year=args.census_year)
     print_state_info(state_info)
+
+    # Get the detected/specified years
+    acs_year = state_paths["acs_year"]
+    census_year = state_paths["census_year"]
+    
+    print(f"\n=== Processing {state_info['name']} demographics ===")
+    print(f"Using ACS year: {acs_year}, Census year: {census_year}\n")
 
     # Get required variables
     state_abbr = state_info["abbr"]
@@ -207,12 +214,12 @@ def main():
     bg_geo = load_bg_geometry(state_paths["bg_shapefile"])
 
     # 2. Load data tables
-    acs_race_csv = find_acs_file(state_abbr, args.acs_year, "race")
-    acs_income_csv = find_acs_file(state_abbr, args.acs_year, "income")
+    acs_race_csv = find_acs_file(state_abbr, acs_year, "race")
+    acs_income_csv = find_acs_file(state_abbr, acs_year, "income")
     
     acs_race = load_acs_race(acs_race_csv)
     acs_income = load_acs_income(acs_income_csv)
-    cvap_bg = load_cvap_blockgroups(state_paths["cvap_blockgr_csv"], args.acs_year)
+    cvap_bg = load_cvap_blockgroups(state_paths["cvap_blockgr_csv"], acs_year)
 
     # 3. Merge ACS + CVAP onto BG geometry
     print("Merging ACS race onto BG geometry...")
@@ -226,49 +233,49 @@ def main():
 
     # 4. Derive totals on BG side
     race_cols = [
-        get_column_name("HSP_POP", args.acs_year), get_column_name("WHT_POP", args.acs_year), 
-        get_column_name("BLK_POP", args.acs_year), get_column_name("AIA_POP", args.acs_year), 
-        get_column_name("ASN_POP", args.acs_year), get_column_name("HPI_POP", args.acs_year),
-        get_column_name("OTH_POP", args.acs_year), get_column_name("2OM_POP", args.acs_year),
+        get_column_name("HSP_POP", acs_year), get_column_name("WHT_POP", acs_year), 
+        get_column_name("BLK_POP", acs_year), get_column_name("AIA_POP", acs_year), 
+        get_column_name("ASN_POP", acs_year), get_column_name("HPI_POP", acs_year),
+        get_column_name("OTH_POP", acs_year), get_column_name("2OM_POP", acs_year),
     ]
     
-    bg[get_column_name("NHSP_POP", args.acs_year)] = (
-        bg[get_column_name("WHT_POP", args.acs_year)] + bg[get_column_name("BLK_POP", args.acs_year)] + 
-        bg[get_column_name("AIA_POP", args.acs_year)] + bg[get_column_name("ASN_POP", args.acs_year)] + 
-        bg[get_column_name("HPI_POP", args.acs_year)] + bg[get_column_name("OTH_POP", args.acs_year)] +
-        bg[get_column_name("2OM_POP", args.acs_year)]
+    bg[get_column_name("NHSP_POP", acs_year)] = (
+        bg[get_column_name("WHT_POP", acs_year)] + bg[get_column_name("BLK_POP", acs_year)] + 
+        bg[get_column_name("AIA_POP", acs_year)] + bg[get_column_name("ASN_POP", acs_year)] + 
+        bg[get_column_name("HPI_POP", acs_year)] + bg[get_column_name("OTH_POP", acs_year)] +
+        bg[get_column_name("2OM_POP", acs_year)]
     )
-    bg[get_column_name("TOT_POP", args.acs_year)] = bg[get_column_name("HSP_POP", args.acs_year)] + bg[get_column_name("NHSP_POP", args.acs_year)]
-    race_cols_all = race_cols + [get_column_name("NHSP_POP", args.acs_year), get_column_name("TOT_POP", args.acs_year)]
+    bg[get_column_name("TOT_POP", acs_year)] = bg[get_column_name("HSP_POP", acs_year)] + bg[get_column_name("NHSP_POP", acs_year)]
+    race_cols_all = race_cols + [get_column_name("NHSP_POP", acs_year), get_column_name("TOT_POP", acs_year)]
 
     cvap_cols = [
-        get_column_name("HSP_CVAP", args.acs_year), get_column_name("WHT_CVAP", args.acs_year), 
-        get_column_name("BLK_CVAP", args.acs_year), get_column_name("AIA_CVAP", args.acs_year), 
-        get_column_name("ASN_CVAP", args.acs_year), get_column_name("HPI_CVAP", args.acs_year),
-        get_column_name("2OM_CVAP", args.acs_year),
+        get_column_name("HSP_CVAP", acs_year), get_column_name("WHT_CVAP", acs_year), 
+        get_column_name("BLK_CVAP", acs_year), get_column_name("AIA_CVAP", acs_year), 
+        get_column_name("ASN_CVAP", acs_year), get_column_name("HPI_CVAP", acs_year),
+        get_column_name("2OM_CVAP", acs_year),
     ]
     
-    bg[get_column_name("NHSP_CVAP", args.acs_year)] = (
-        bg[get_column_name("WHT_CVAP", args.acs_year)] + bg[get_column_name("BLK_CVAP", args.acs_year)] + 
-        bg[get_column_name("AIA_CVAP", args.acs_year)] + bg[get_column_name("ASN_CVAP", args.acs_year)] + 
-        bg[get_column_name("HPI_CVAP", args.acs_year)] + bg[get_column_name("2OM_CVAP", args.acs_year)]
+    bg[get_column_name("NHSP_CVAP", acs_year)] = (
+        bg[get_column_name("WHT_CVAP", acs_year)] + bg[get_column_name("BLK_CVAP", acs_year)] + 
+        bg[get_column_name("AIA_CVAP", acs_year)] + bg[get_column_name("ASN_CVAP", acs_year)] + 
+        bg[get_column_name("HPI_CVAP", acs_year)] + bg[get_column_name("2OM_CVAP", acs_year)]
     )
-    bg[get_column_name("TOT_CVAP", args.acs_year)] = bg[get_column_name("HSP_CVAP", args.acs_year)] + bg[get_column_name("NHSP_CVAP", args.acs_year)]
-    cvap_cols_all = cvap_cols + [get_column_name("NHSP_CVAP", args.acs_year), get_column_name("TOT_CVAP", args.acs_year)]
+    bg[get_column_name("TOT_CVAP", acs_year)] = bg[get_column_name("HSP_CVAP", acs_year)] + bg[get_column_name("NHSP_CVAP", acs_year)]
+    cvap_cols_all = cvap_cols + [get_column_name("NHSP_CVAP", acs_year), get_column_name("TOT_CVAP", acs_year)]
 
     income_cols = [
-        get_column_name("LESS_10K", args.acs_year), get_column_name("10K_15K", args.acs_year), 
-        get_column_name("15K_20K", args.acs_year), get_column_name("20K_25K", args.acs_year),
-        get_column_name("25K_30K", args.acs_year), get_column_name("30K_35K", args.acs_year), 
-        get_column_name("35K_40K", args.acs_year), get_column_name("40K_45K", args.acs_year),
-        get_column_name("45K_50K", args.acs_year), get_column_name("50K_60K", args.acs_year), 
-        get_column_name("60K_75K", args.acs_year), get_column_name("75K_100K", args.acs_year),
-        get_column_name("100_125K", args.acs_year), get_column_name("125_150K", args.acs_year), 
-        get_column_name("150_200K", args.acs_year), get_column_name("200K_MOR", args.acs_year),
+        get_column_name("LESS_10K", acs_year), get_column_name("10K_15K", acs_year), 
+        get_column_name("15K_20K", acs_year), get_column_name("20K_25K", acs_year),
+        get_column_name("25K_30K", acs_year), get_column_name("30K_35K", acs_year), 
+        get_column_name("35K_40K", acs_year), get_column_name("40K_45K", acs_year),
+        get_column_name("45K_50K", acs_year), get_column_name("50K_60K", acs_year), 
+        get_column_name("60K_75K", acs_year), get_column_name("75K_100K", acs_year),
+        get_column_name("100_125K", acs_year), get_column_name("125_150K", acs_year), 
+        get_column_name("150_200K", acs_year), get_column_name("200K_MOR", acs_year),
     ]
     
-    bg[get_column_name("TOT_HOUS", args.acs_year)] = bg[income_cols].sum(axis=1)
-    income_cols_all = income_cols + [get_column_name("TOT_HOUS", args.acs_year)]
+    bg[get_column_name("TOT_HOUS", acs_year)] = bg[income_cols].sum(axis=1)
+    income_cols_all = income_cols + [get_column_name("TOT_HOUS", acs_year)]
 
     numeric_cols = race_cols_all + cvap_cols_all + income_cols_all
     for col in numeric_cols:
@@ -298,18 +305,18 @@ def main():
     )
 
     # Placeholder median income (can be computed properly later)
-    precincts[get_column_name("MEDN_INC", args.acs_year)] = 0
+    precincts[get_column_name("MEDN_INC", acs_year)] = 0
 
     # Make sure numeric columns are integer-like on precincts
-    for col in numeric_cols + [get_column_name("MEDN_INC", args.acs_year)]:
+    for col in numeric_cols + [get_column_name("MEDN_INC", acs_year)]:
         if col in precincts.columns:
             precincts[col] = precincts[col].fillna(0).round().astype("Int64")
 
-    # 8. Save comparison CSVs
-    pop_comp.to_csv(state_paths["pop_comparison_csv"], index_label="variable")
-    cvap_comp.to_csv(state_paths["cvap_comparison_csv"], index_label="variable")
-    income_comp.to_csv(state_paths["income_comparison_csv"], index_label="variable")
-    print(f"\nSaved diagnostics to {state_paths['state_output_dir']}")
+    # 8. Save comparison CSVs (commented out - just printing to terminal is enough)
+    # pop_comp.to_csv(state_paths["pop_comparison_csv"], index_label="variable")
+    # cvap_comp.to_csv(state_paths["cvap_comparison_csv"], index_label="variable")
+    # income_comp.to_csv(state_paths["income_comparison_csv"], index_label="variable")
+    # print(f"\nSaved diagnostics to {state_paths['state_output_dir']}")
 
     # 9. Prepare final precinct output with key columns
     # Core ID / meta columns we want to keep (only if they exist)
@@ -332,14 +339,14 @@ def main():
     ]
 
     # Demographic fields: any column ending with year suffix
-    year_suffix = str(args.acs_year)[-2:]  # Get last 2 digits
+    year_suffix = str(acs_year)[-2:]  # Get last 2 digits
     demo_cols = [
         c
         for c in precincts.columns
         if c.endswith(f"POP{year_suffix}") or c.endswith(f"CVAP{year_suffix}")
     ]
 
-    other_cols = [get_column_name("MEDN_INC", args.acs_year), "geometry"]
+    other_cols = [get_column_name("MEDN_INC", acs_year), "geometry"]
 
     # Now build keep list, but only include columns that actually exist
     raw_keep_cols = (

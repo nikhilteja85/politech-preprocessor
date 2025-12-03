@@ -73,15 +73,15 @@ def setup_argument_parser(description: str, stage_name: str = None) -> argparse.
     parser.add_argument(
         "--acs-year",
         type=int,
-        default=2023,
-        help="ACS data year (default: 2023)"
+        default=None,
+        help="ACS data year (default: auto-detect most recent available)"
     )
     
     parser.add_argument(
         "--census-year",
         type=int,
-        default=2020,
-        help="Census year for TIGER shapefiles (default: 2020)"
+        default=None,
+        help="Census year for TIGER shapefiles (default: auto-detect most recent available)"
     )
     
     if stage_name:
@@ -92,19 +92,38 @@ def setup_argument_parser(description: str, stage_name: str = None) -> argparse.
     
     return parser
 
-def get_state_paths(state_abbr: str, acs_year: int = 2023, census_year: int = 2020) -> Dict[str, str]:
+def get_state_paths(state_abbr: str, acs_year: int = None, census_year: int = None) -> Dict[str, str]:
     """
     Generate all standard file paths for a given state.
     
     Args:
         state_abbr: Lowercase state abbreviation (e.g., 'az', 'ca')
-        acs_year: ACS data year
-        census_year: Census year for TIGER data
+        acs_year: ACS data year (auto-detects if None)
+        census_year: Census year for TIGER data (auto-detects if None)
         
     Returns:
         Dictionary of standard file paths for the state
     """
     state_fips = get_state_info(state_abbr.upper())["fips"]
+    
+    # Auto-detect years if not provided
+    if acs_year is None:
+        available_acs_years = detect_available_acs_years(state_abbr)
+        if available_acs_years:
+            acs_year = available_acs_years[0]  # Use most recent
+            print(f"📅 Auto-detected ACS year: {acs_year}")
+        else:
+            # Fallback to 2023 if no data found (e.g., for Stage 0 download)
+            acs_year = 2023
+    
+    if census_year is None:
+        available_tiger_years = detect_available_tiger_years()
+        if available_tiger_years:
+            census_year = available_tiger_years[0]  # Use most recent
+            print(f"📅 Auto-detected TIGER year: {census_year}")
+        else:
+            # Fallback to 2020 if no data found (e.g., for Stage 0 download)
+            census_year = 2020
     
     # Input directories
     tiger_dir = os.path.join(INPUTS_DIR, f"tiger_{census_year}")
@@ -116,6 +135,9 @@ def get_state_paths(state_abbr: str, acs_year: int = 2023, census_year: int = 20
     # Output directory
     state_output_dir = os.path.join(OUTPUTS_DIR, state_abbr)
     os.makedirs(state_output_dir, exist_ok=True)
+    
+    # Ensure outputs directory exists
+    os.makedirs(OUTPUTS_DIR, exist_ok=True)
     
     return {
         # Directories
@@ -129,6 +151,10 @@ def get_state_paths(state_abbr: str, acs_year: int = 2023, census_year: int = 20
         # State identifiers (for compatibility)
         "state_abbr": state_abbr,
         "state_fips": state_fips,
+        
+        # Years used
+        "acs_year": acs_year,
+        "census_year": census_year,
         
         # TIGER shapefiles
         "bg_shapefile": os.path.join(tiger_dir, f"{state_abbr}_bg", f"tl_{census_year}_{state_fips}_bg.shp"),
@@ -146,14 +172,77 @@ def get_state_paths(state_abbr: str, acs_year: int = 2023, census_year: int = 20
         "bg_geojson": os.path.join(state_output_dir, f"{state_abbr}_bg_all_data_{acs_year}.geojson"),
         "precinct_geojson": os.path.join(state_output_dir, f"{state_abbr}_precinct_all_pop_{acs_year}.geojson"),
         "dots_geojson": os.path.join(state_output_dir, f"{state_abbr}_dots_pop{str(acs_year)[-2:]}_unit{{dot_unit}}.geojson"),
-        "plans_json": os.path.join(state_output_dir, f"{state_abbr}_plans_{{year}}.json"),
-        "assignments_json": os.path.join(state_output_dir, f"{state_abbr}_assignments_{{year}}.json"),
+        
+        # Centralized JSON files (all states in one file)
+        "plans_json": os.path.join(OUTPUTS_DIR, "plans.json"),
+        "assignments_json": os.path.join(OUTPUTS_DIR, "assignments.json"),
         
         # Comparison CSV files
         "pop_comparison_csv": os.path.join(state_output_dir, f"{state_abbr}_population_comparison_{acs_year}.csv"),
         "cvap_comparison_csv": os.path.join(state_output_dir, f"{state_abbr}_cvap_comparison_{acs_year}.csv"),
         "income_comparison_csv": os.path.join(state_output_dir, f"{state_abbr}_income_comparison_{acs_year}.csv"),
     }
+
+def detect_available_acs_years(state_abbr: str = None) -> list:
+    """
+    Detect available ACS years in the inputs directory.
+    
+    Args:
+        state_abbr: Optional state abbreviation to check for state-specific data
+        
+    Returns:
+        List of available years (sorted, most recent first)
+    """
+    import re
+    years = []
+    
+    if not os.path.exists(INPUTS_DIR):
+        return years
+    
+    # Find all acs_* directories
+    for item in os.listdir(INPUTS_DIR):
+        match = re.match(r'acs_(\d{4})$', item)
+        if match:
+            year = int(match.group(1))
+            acs_dir = os.path.join(INPUTS_DIR, item)
+            
+            # If state specified, check if data exists for that state
+            if state_abbr:
+                # Check new structure
+                state_dir = os.path.join(acs_dir, state_abbr)
+                if os.path.isdir(state_dir) and any(f.endswith('.csv') for f in os.listdir(state_dir)):
+                    years.append(year)
+                    continue
+                # Check old structure
+                if any(f.startswith(f"{state_abbr}_bg_") and f.endswith('.csv') for f in os.listdir(acs_dir)):
+                    years.append(year)
+            else:
+                years.append(year)
+    
+    return sorted(years, reverse=True)
+
+
+def detect_available_tiger_years() -> list:
+    """
+    Detect available TIGER years in the inputs directory.
+    
+    Returns:
+        List of available years (sorted, most recent first)
+    """
+    import re
+    years = []
+    
+    if not os.path.exists(INPUTS_DIR):
+        return years
+    
+    # Find all tiger_* directories
+    for item in os.listdir(INPUTS_DIR):
+        match = re.match(r'tiger_(\d{4})$', item)
+        if match:
+            years.append(int(match.group(1)))
+    
+    return sorted(years, reverse=True)
+
 
 def find_acs_file(state_abbr: str, acs_year: int, file_type: str) -> str:
     """
@@ -229,52 +318,114 @@ def find_precinct_shapefile(precincts_dir: str) -> str:
     print(f"Using precinct shapefile: {shp_path}")
     return shp_path
 
-def find_plan_shapefiles(plans_dir: str, state_abbr: str, plan_year: int = 2022) -> Dict[str, str]:
+def detect_available_plan_years(plans_dir: str, state_abbr: str) -> Dict[str, list]:
     """
-    Find congressional and legislative plan shapefiles.
+    Detect available plan years for a state by scanning plan directories.
     
     Args:
         plans_dir: Directory containing plan shapefiles
         state_abbr: State abbreviation
-        plan_year: Year of the plans
         
     Returns:
-        Dictionary with 'cong' and 'leg' keys pointing to shapefile paths
+        Dictionary with chamber keys (e.g., 'cong', 'sldl', 'sldu', 'sl') mapping to lists of available years
+    """
+    import re
+    years = {}
+    
+    if not os.path.isdir(plans_dir):
+        return years
+    
+    for item in os.listdir(plans_dir):
+        item_path = os.path.join(plans_dir, item)
+        if not os.path.isdir(item_path):
+            continue
+        
+        # Match any chamber pattern: {state}_{chamber}_adopted_{year}
+        # Common chambers: cong, sl, sldl, sldu
+        match = re.match(rf'{state_abbr}_(cong|sl|sldl|sldu)_adopted_(\d{{4}})(?:_.*)?$', item)
+        if match:
+            chamber = match.group(1)
+            year = int(match.group(2))
+            # Check if it has shapefiles
+            if any(f.endswith('.shp') for f in os.listdir(item_path)):
+                if chamber not in years:
+                    years[chamber] = []
+                years[chamber].append(year)
+    
+    # Sort years (most recent first) for each chamber
+    for chamber in years:
+        years[chamber].sort(reverse=True)
+    
+    return years
+
+
+def find_plan_shapefiles(plans_dir: str, state_abbr: str, plan_year: int = None) -> Dict[str, str]:
+    """
+    Find all available plan shapefiles for all chambers (congressional, legislative upper/lower, etc.).
+    
+    Args:
+        plans_dir: Directory containing plan shapefiles
+        state_abbr: State abbreviation
+        plan_year: Year of the plans (optional - will auto-detect if not provided)
+        
+    Returns:
+        Dictionary with chamber keys (e.g., 'cong', 'sldl', 'sldu') pointing to shapefile paths, and 'year' key
         
     Raises:
-        FileNotFoundError: If required plan directories or shapefiles are not found
+        FileNotFoundError: If no plan directories or shapefiles are found
     """
+    import re
     plans = {}
     
-    # Congressional plan
-    cong_dir = os.path.join(plans_dir, f"{state_abbr}_cong_adopted_{plan_year}")
-    if os.path.isdir(cong_dir):
-        cong_shps = [f for f in os.listdir(cong_dir) if f.endswith(".shp")]
-        if cong_shps:
-            plans["cong"] = os.path.join(cong_dir, cong_shps[0])
+    # Auto-detect year if not provided
+    if plan_year is None:
+        available_years = detect_available_plan_years(plans_dir, state_abbr)
+        
+        if not available_years:
+            raise FileNotFoundError(
+                f"No plan shapefiles found in {plans_dir}.\n"
+                f"Expected directories like: {state_abbr}_cong_adopted_YYYY, {state_abbr}_sldl_adopted_YYYY, etc."
+            )
+        
+        # Get all unique years across all chambers
+        all_years = sorted(set(year for years_list in available_years.values() for year in years_list), reverse=True)
+        plan_year = all_years[0]  # Use most recent year
+        
+        print(f"📅 Auto-detected plan year: {plan_year}")
+        chambers_info = ", ".join([f"{chamber}: {years}" for chamber, years in available_years.items()])
+        print(f"   Available years by chamber: {chambers_info}")
     
-    # Legislative plan
-    leg_dir = os.path.join(plans_dir, f"{state_abbr}_sl_adopted_{plan_year}")
-    if os.path.isdir(leg_dir):
-        leg_shps = [f for f in os.listdir(leg_dir) if f.endswith(".shp")]
-        if leg_shps:
-            plans["leg"] = os.path.join(leg_dir, leg_shps[0])
+    # Scan for all chamber directories matching the pattern
+    if os.path.isdir(plans_dir):
+        for item in os.listdir(plans_dir):
+            # Match pattern: {state}_{chamber}_adopted_{year} (with optional suffix like _cd119)
+            match = re.match(rf'{state_abbr}_(cong|sl|sldl|sldu)_adopted_{plan_year}(?:_.*)?$', item)
+            if match:
+                chamber = match.group(1)
+                chamber_dir = os.path.join(plans_dir, item)
+                if os.path.isdir(chamber_dir):
+                    shp_files = [f for f in os.listdir(chamber_dir) if f.endswith(".shp")]
+                    if shp_files:
+                        plans[chamber] = os.path.join(chamber_dir, shp_files[0])
     
     if not plans:
         raise FileNotFoundError(
-            f"No plan shapefiles found in {plans_dir}. "
-            f"Expected directories: {state_abbr}_cong_adopted_{plan_year}, {state_abbr}_sl_adopted_{plan_year}"
+            f"No plan shapefiles found in {plans_dir} for year {plan_year}.\n"
+            f"Expected directories: {state_abbr}_{{chamber}}_adopted_{plan_year}"
         )
     
+    plans['year'] = plan_year  # Include detected/provided year
     return plans
 
-def validate_state_setup(state_code: str, stage: str = None) -> Tuple[Dict[str, str], Dict[str, str]]:
+def validate_state_setup(state_code: str, stage: str = None, acs_year: int = None, census_year: int = None) -> Tuple[Dict[str, str], Dict[str, str]]:
     """
     Validate that a state is properly configured and return state info and paths.
     
     Args:
         state_code: Two-letter state code
         stage: Optional stage name for better error messages
+        acs_year: ACS year (None for auto-detect)
+        census_year: Census year (None for auto-detect)
         
     Returns:
         Tuple of (state_info, state_paths)
@@ -285,7 +436,7 @@ def validate_state_setup(state_code: str, stage: str = None) -> Tuple[Dict[str, 
     """
     # Validate state code
     state_info = get_state_info(state_code)
-    state_paths = get_state_paths(state_info["abbr"])
+    state_paths = get_state_paths(state_info["abbr"], acs_year=acs_year, census_year=census_year)
     
     # Check for required environment variables based on stage
     if stage in ["stage0", "stage_0", "get_inputs"]:

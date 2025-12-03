@@ -75,6 +75,23 @@ def load_layer_simple(path: str, name: str) -> gpd.GeoDataFrame:
     if gdf.crs is None:
         print(f"⚠ {name} has no CRS; assuming EPSG:4326")
         gdf.crs = "EPSG:4326"
+    
+    # Map TIGER column names to standard DISTRICT column for plan shapefiles
+    district_col_map = {
+        'DISTRICT': 'DISTRICT',  # Already standardized
+        'CD119FP': 'DISTRICT',   # TIGER congressional
+        'CD118FP': 'DISTRICT',
+        'CD117FP': 'DISTRICT',
+        'CD116FP': 'DISTRICT',
+        'SLDLST': 'DISTRICT',    # TIGER state legislative lower
+        'SLDUST': 'DISTRICT',    # TIGER state legislative upper
+    }
+    
+    for tiger_col in district_col_map:
+        if tiger_col in gdf.columns and tiger_col != 'DISTRICT':
+            gdf['DISTRICT'] = gdf[tiger_col]
+            break
+    
     return gdf
 
 
@@ -237,9 +254,15 @@ def main():
     )
     
     parser.add_argument(
-        "--leg-plan", 
+        "--sldl-plan", 
         type=str,
-        help="Legislative plan directory name (auto-detect if not specified)"
+        help="State Legislative Lower plan directory name (auto-detect if not specified)"
+    )
+    
+    parser.add_argument(
+        "--sldu-plan", 
+        type=str,
+        help="State Legislative Upper plan directory name (auto-detect if not specified)"
     )
 
     args = parser.parse_args()
@@ -264,7 +287,7 @@ def main():
     precincts = load_layer_simple(precinct_path, "Precinct layer")
 
     # 3. Load dots (from Stage 3)
-    dots = load_dots(state_paths, args.dot_unit, args.acs_year)
+    dots = load_dots(state_paths, args.dot_unit, state_paths["acs_year"])
     if dots is not None and "group" in dots.columns:
         print("\nDot counts by group:")
         print(dots["group"].value_counts())
@@ -282,45 +305,87 @@ def main():
         # Auto-detect congressional plans
         if os.path.exists(plans_dir):
             for item in os.listdir(plans_dir):
-                if 'cong' in item.lower():
+                if 'cong' in item.lower() and 'adopted' in item.lower():
                     cong_path = find_plan_file(plans_dir, item, "Congressional")
                     if cong_path:
                         cong = load_layer_simple(cong_path, "Congressional plan")
                         break
 
-    # Auto-detect or use specified legislative plan  
-    leg = None
-    if args.leg_plan:
-        leg_path = find_plan_file(plans_dir, args.leg_plan, "Legislative")
-        if leg_path:
-            leg = load_layer_simple(leg_path, "State legislative plan")
+    # Auto-detect or use specified legislative plans (can have multiple chambers)
+    leg_plans = {}
+    
+    # Check for SLDL (State Legislative Lower)
+    if hasattr(args, 'sldl_plan') and args.sldl_plan:
+        sldl_path = find_plan_file(plans_dir, args.sldl_plan, "State Legislative Lower")
+        if sldl_path:
+            leg_plans['sldl'] = load_layer_simple(sldl_path, "State Legislative Lower plan")
     else:
-        # Auto-detect legislative plans
+        # Auto-detect SLDL
         if os.path.exists(plans_dir):
             for item in os.listdir(plans_dir):
-                if any(x in item.lower() for x in ['leg', 'sl_', 'state', 'assembly', 'senate']):
-                    leg_path = find_plan_file(plans_dir, item, "Legislative")
-                    if leg_path:
-                        leg = load_layer_simple(leg_path, "State legislative plan")
+                if 'sldl' in item.lower() and 'adopted' in item.lower():
+                    sldl_path = find_plan_file(plans_dir, item, "State Legislative Lower")
+                    if sldl_path:
+                        leg_plans['sldl'] = load_layer_simple(sldl_path, "State Legislative Lower plan")
                         break
+    
+    # Check for SLDU (State Legislative Upper)
+    if hasattr(args, 'sldu_plan') and args.sldu_plan:
+        sldu_path = find_plan_file(plans_dir, args.sldu_plan, "State Legislative Upper")
+        if sldu_path:
+            leg_plans['sldu'] = load_layer_simple(sldu_path, "State Legislative Upper plan")
+    else:
+        # Auto-detect SLDU
+        if os.path.exists(plans_dir):
+            for item in os.listdir(plans_dir):
+                if 'sldu' in item.lower() and 'adopted' in item.lower():
+                    sldu_path = find_plan_file(plans_dir, item, "State Legislative Upper")
+                    if sldu_path:
+                        leg_plans['sldu'] = load_layer_simple(sldu_path, "State Legislative Upper plan")
+                        break
+    
+    # Fallback: check for generic 'sl' (unicameral legislature)
+    if not leg_plans and os.path.exists(plans_dir):
+        for item in os.listdir(plans_dir):
+            if item.lower().startswith(state_info['abbr'] + '_sl_') and 'sldl' not in item.lower() and 'sldu' not in item.lower():
+                sl_path = find_plan_file(plans_dir, item, "State Legislative")
+                if sl_path:
+                    leg_plans['sl'] = load_layer_simple(sl_path, "State Legislative plan")
+                    break
 
-    if cong is None and leg is None:
+    if cong is None and not leg_plans:
         print("⚠ No redistricting plans found. Visualization will only show demographics.")
 
     # 5. Reproject for plotting
     bg_plot = prep_for_plot(bg)
     precincts_plot = prep_for_plot(precincts)
     cong_plot = prep_for_plot(cong)
-    leg_plot = prep_for_plot(leg)
+    leg_plots = {chamber: prep_for_plot(plan) for chamber, plan in leg_plans.items()}
     dots_plot = prep_for_plot(dots)
 
-    # 6. Create figure
-    if cong is not None and leg is not None:
+    # 6. Create figure - determine number of subplots
+    num_plots = 0
+    if cong is not None:
+        num_plots += 1
+    num_plots += len(leg_plans)
+    
+    if num_plots == 0:
+        # No plans, just show base
+        fig, axes = plt.subplots(1, 1, figsize=(10, 8), constrained_layout=True)
+        axes = [axes]
+    elif num_plots == 1:
+        fig, axes = plt.subplots(1, 1, figsize=(10, 8), constrained_layout=True)
+        axes = [axes]
+    elif num_plots == 2:
         fig, axes = plt.subplots(1, 2, figsize=(16, 8), constrained_layout=True, sharex=True, sharey=True)
-        ax_cong, ax_leg = axes
+    elif num_plots == 3:
+        fig, axes = plt.subplots(1, 3, figsize=(24, 8), constrained_layout=True, sharex=True, sharey=True)
     else:
-        fig, ax_single = plt.subplots(1, 1, figsize=(10, 8), constrained_layout=True)
-        axes = [ax_single]
+        # More than 3, use grid
+        ncols = min(3, num_plots)
+        nrows = (num_plots + ncols - 1) // ncols
+        fig, axes = plt.subplots(nrows, ncols, figsize=(8*ncols, 8*nrows), constrained_layout=True, sharex=True, sharey=True)
+        axes = axes.flatten() if num_plots > 1 else [axes]
 
     def draw_base(ax):
         """Draw the base layers (block groups, precincts, dots)."""
@@ -345,9 +410,11 @@ def main():
         plot_dots(ax, dots_plot)
 
     # Plot based on available plans
-    if cong is not None and leg is not None:
-        # LEFT: Congressional plan
-        ax = ax_cong
+    plot_idx = 0
+    
+    # Draw congressional plan
+    if cong_plot is not None:
+        ax = axes[plot_idx]
         ax.set_title(
             f"{state_info['name']}: BG (dashed) + Precincts (solid) + Dots + Congressional Districts",
             fontsize=11,
@@ -362,68 +429,50 @@ def main():
         )
         add_district_labels(ax, cong_plot, "DISTRICT")
         ax.set_axis_off()
+        plot_idx += 1
 
-        # RIGHT: State legislative plan
-        ax = ax_leg
-        ax.set_title(
-            f"{state_info['name']}: BG (dashed) + Precincts (solid) + Dots + State Legislative Districts",
-            fontsize=11,
-        )
-        draw_base(ax)
-        leg_plot.boundary.plot(
-            ax=ax,
-            linewidth=1.3,
-            edgecolor="blue",
-            alpha=0.9,
-            zorder=4,
-        )
-        add_district_labels(ax, leg_plot, "DISTRICT")
-        ax.set_axis_off()
-
-        plt.suptitle(
-            f"{state_info['name']} Comparison: BG / Precincts / Dots / Plans",
-            fontsize=14,
-        )
-
-    else:
-        # Single plot with available plan or demographics only
-        ax = ax_single
-        if cong is not None:
+    # Draw legislative plans
+    chamber_names = {
+        'sldl': 'State Legislative Lower',
+        'sldu': 'State Legislative Upper',
+        'sl': 'State Legislative'
+    }
+    
+    for chamber, leg_plot in leg_plots.items():
+        if leg_plot is not None:
+            ax = axes[plot_idx]
+            chamber_name = chamber_names.get(chamber, chamber.upper())
             ax.set_title(
-                f"{state_info['name']}: BG (dashed) + Precincts (solid) + Dots + Congressional Districts",
-                fontsize=12,
-            )
-            draw_base(ax)
-            cong_plot.boundary.plot(
-                ax=ax,
-                linewidth=1.5,
-                edgecolor="red",
-                alpha=0.9,
-                zorder=4,
-            )
-            add_district_labels(ax, cong_plot, "DISTRICT")
-        elif leg is not None:
-            ax.set_title(
-                f"{state_info['name']}: BG (dashed) + Precincts (solid) + Dots + State Legislative Districts",
-                fontsize=12,
+                f"{state_info['name']}: BG (dashed) + Precincts (solid) + Dots + {chamber_name} Districts",
+                fontsize=11,
             )
             draw_base(ax)
             leg_plot.boundary.plot(
                 ax=ax,
-                linewidth=1.5,
+                linewidth=1.3,
                 edgecolor="blue",
                 alpha=0.9,
                 zorder=4,
             )
             add_district_labels(ax, leg_plot, "DISTRICT")
-        else:
-            ax.set_title(
-                f"{state_info['name']}: BG (dashed) + Precincts (solid) + Race Dots",
-                fontsize=12,
-            )
-            draw_base(ax)
-        
+            ax.set_axis_off()
+            plot_idx += 1
+
+    # If no plans, just show demographics
+    if num_plots == 0:
+        ax = axes[0]
+        ax.set_title(
+            f"{state_info['name']}: BG (dashed) + Precincts (solid) + Race Dots",
+            fontsize=12,
+        )
+        draw_base(ax)
         ax.set_axis_off()
+
+    if num_plots > 1:
+        plt.suptitle(
+            f"{state_info['name']} Comparison: BG / Precincts / Dots / Plans",
+            fontsize=14,
+        )
 
     # Set common extent from block groups
     minx, miny, maxx, maxy = bg_plot.total_bounds

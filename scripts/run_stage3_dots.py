@@ -210,8 +210,8 @@ def main():
     state_info, state_paths = validate_state_setup(args.state)
     print_state_info(state_info)
 
-    # Get year suffix for column names
-    year_suffix = str(args.acs_year)[-2:]
+    # Get year suffix for column names (use the year from state_paths, not args)
+    year_suffix = str(state_paths["acs_year"])[-2:]
     
     # Build group columns with year suffix
     group_cols = {
@@ -293,16 +293,16 @@ def main():
     print(f"  -> combined dots: {dots_combined}")
 
     # per-group
-    prefix = os.path.splitext(os.path.basename(dots_combined))[0]
-    out_dir = os.path.dirname(dots_combined)
+    # prefix = os.path.splitext(os.path.basename(dots_combined))[0]
+    # out_dir = os.path.dirname(dots_combined)
 
-    for g in group_cols.keys():
-        subset = dots_web.query("group == @g")
-        if subset.empty:
-            continue
-        path = os.path.join(out_dir, f"{prefix}_{g}.geojson")
-        subset.to_file(path, driver="GeoJSON")
-        print(f"  -> {g}: {len(subset):,} dots → {path}")
+    # for g in group_cols.keys():
+    #     subset = dots_web.query("group == @g")
+    #     if subset.empty:
+    #         continue
+    #     path = os.path.join(out_dir, f"{prefix}_{g}.geojson")
+    #     subset.to_file(path, driver="GeoJSON")
+    #     print(f"  -> {g}: {len(subset):,} dots → {path}")
 
     print("[4] Done.")
     print(f"\nNext: Run stage 4 with -> python run_stage4_comp.py {args.state}")

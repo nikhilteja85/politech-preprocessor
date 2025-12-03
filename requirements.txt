@@ -13,6 +13,9 @@ maup>=2.0.0
 # Web requests and data fetching
 requests>=2.31.0
 
+# MongoDB driver
+pymongo>=4.6.0
+
 # Environment management
 python-dotenv>=1.0.0
 
