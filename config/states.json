@@ -1,0 +1,259 @@
+{
+  "states": {
+    "AL": {
+      "name": "Alabama",
+      "fips": "01",
+      "abbr": "al"
+    },
+    "AK": {
+      "name": "Alaska",
+      "fips": "02",
+      "abbr": "ak"
+    },
+    "AZ": {
+      "name": "Arizona",
+      "fips": "04",
+      "abbr": "az"
+    },
+    "AR": {
+      "name": "Arkansas",
+      "fips": "05",
+      "abbr": "ar"
+    },
+    "CA": {
+      "name": "California",
+      "fips": "06",
+      "abbr": "ca"
+    },
+    "CO": {
+      "name": "Colorado",
+      "fips": "08",
+      "abbr": "co"
+    },
+    "CT": {
+      "name": "Connecticut",
+      "fips": "09",
+      "abbr": "ct"
+    },
+    "DE": {
+      "name": "Delaware",
+      "fips": "10",
+      "abbr": "de"
+    },
+    "FL": {
+      "name": "Florida",
+      "fips": "12",
+      "abbr": "fl"
+    },
+    "GA": {
+      "name": "Georgia",
+      "fips": "13",
+      "abbr": "ga"
+    },
+    "HI": {
+      "name": "Hawaii",
+      "fips": "15",
+      "abbr": "hi"
+    },
+    "ID": {
+      "name": "Idaho",
+      "fips": "16",
+      "abbr": "id"
+    },
+    "IL": {
+      "name": "Illinois",
+      "fips": "17",
+      "abbr": "il"
+    },
+    "IN": {
+      "name": "Indiana",
+      "fips": "18",
+      "abbr": "in"
+    },
+    "IA": {
+      "name": "Iowa",
+      "fips": "19",
+      "abbr": "ia"
+    },
+    "KS": {
+      "name": "Kansas",
+      "fips": "20",
+      "abbr": "ks"
+    },
+    "KY": {
+      "name": "Kentucky",
+      "fips": "21",
+      "abbr": "ky"
+    },
+    "LA": {
+      "name": "Louisiana",
+      "fips": "22",
+      "abbr": "la"
+    },
+    "ME": {
+      "name": "Maine",
+      "fips": "23",
+      "abbr": "me"
+    },
+    "MD": {
+      "name": "Maryland",
+      "fips": "24",
+      "abbr": "md"
+    },
+    "MA": {
+      "name": "Massachusetts",
+      "fips": "25",
+      "abbr": "ma"
+    },
+    "MI": {
+      "name": "Michigan",
+      "fips": "26",
+      "abbr": "mi"
+    },
+    "MN": {
+      "name": "Minnesota",
+      "fips": "27",
+      "abbr": "mn"
+    },
+    "MS": {
+      "name": "Mississippi",
+      "fips": "28",
+      "abbr": "ms"
+    },
+    "MO": {
+      "name": "Missouri",
+      "fips": "29",
+      "abbr": "mo"
+    },
+    "MT": {
+      "name": "Montana",
+      "fips": "30",
+      "abbr": "mt"
+    },
+    "NE": {
+      "name": "Nebraska",
+      "fips": "31",
+      "abbr": "ne"
+    },
+    "NV": {
+      "name": "Nevada",
+      "fips": "32",
+      "abbr": "nv"
+    },
+    "NH": {
+      "name": "New Hampshire",
+      "fips": "33",
+      "abbr": "nh"
+    },
+    "NJ": {
+      "name": "New Jersey",
+      "fips": "34",
+      "abbr": "nj"
+    },
+    "NM": {
+      "name": "New Mexico",
+      "fips": "35",
+      "abbr": "nm"
+    },
+    "NY": {
+      "name": "New York",
+      "fips": "36",
+      "abbr": "ny"
+    },
+    "NC": {
+      "name": "North Carolina",
+      "fips": "37",
+      "abbr": "nc"
+    },
+    "ND": {
+      "name": "North Dakota",
+      "fips": "38",
+      "abbr": "nd"
+    },
+    "OH": {
+      "name": "Ohio",
+      "fips": "39",
+      "abbr": "oh"
+    },
+    "OK": {
+      "name": "Oklahoma",
+      "fips": "40",
+      "abbr": "ok"
+    },
+    "OR": {
+      "name": "Oregon",
+      "fips": "41",
+      "abbr": "or"
+    },
+    "PA": {
+      "name": "Pennsylvania",
+      "fips": "42",
+      "abbr": "pa"
+    },
+    "RI": {
+      "name": "Rhode Island",
+      "fips": "44",
+      "abbr": "ri"
+    },
+    "SC": {
+      "name": "South Carolina",
+      "fips": "45",
+      "abbr": "sc"
+    },
+    "SD": {
+      "name": "South Dakota",
+      "fips": "46",
+      "abbr": "sd"
+    },
+    "TN": {
+      "name": "Tennessee",
+      "fips": "47",
+      "abbr": "tn"
+    },
+    "TX": {
+      "name": "Texas",
+      "fips": "48",
+      "abbr": "tx"
+    },
+    "UT": {
+      "name": "Utah",
+      "fips": "49",
+      "abbr": "ut"
+    },
+    "VT": {
+      "name": "Vermont",
+      "fips": "50",
+      "abbr": "vt"
+    },
+    "VA": {
+      "name": "Virginia",
+      "fips": "51",
+      "abbr": "va"
+    },
+    "WA": {
+      "name": "Washington",
+      "fips": "53",
+      "abbr": "wa"
+    },
+    "WV": {
+      "name": "West Virginia",
+      "fips": "54",
+      "abbr": "wv"
+    },
+    "WI": {
+      "name": "Wisconsin",
+      "fips": "55",
+      "abbr": "wi"
+    },
+    "WY": {
+      "name": "Wyoming",
+      "fips": "56",
+      "abbr": "wy"
+    },
+    "DC": {
+      "name": "District of Columbia",
+      "fips": "11",
+      "abbr": "dc"
+    }
+  }
+}

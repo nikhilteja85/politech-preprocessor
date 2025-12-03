@@ -1,0 +1,28 @@
+# Core data processing and analysis
+numpy>=1.26.0,<2.0.0
+pandas>=2.2.0,<3.0.0
+
+# Geospatial libraries
+geopandas>=0.14.0
+shapely>=2.0.0
+fiona>=1.9.0
+
+# Redistricting and geographic analysis
+maup>=2.0.0
+
+# Web requests and data fetching
+requests>=2.31.0
+
+# Environment management
+python-dotenv>=1.0.0
+
+# Visualization
+matplotlib>=3.8.0
+
+# Additional geospatial dependencies (often required by geopandas)
+pyproj>=3.6.0
+rtree>=1.0.0
+
+# File format support
+openpyxl>=3.1.0
+xlrd>=2.0.0
