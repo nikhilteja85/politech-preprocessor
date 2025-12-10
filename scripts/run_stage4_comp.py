@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Stage 4: Compare plans and dots visualization.
+Stage 4: Compare plans and dots visualization with district statistics.
 
 This script creates side-by-side visualizations showing:
   • Block groups (light dashed outlines)
@@ -8,6 +8,7 @@ This script creates side-by-side visualizations showing:
   • Race dot map (from Stage 3)
   • Congressional plan outlines
   • State legislative plan outlines
+  • District-level demographic statistics (population, income, CVAP)
 
 Usage:
     python run_stage4_comp.py <STATE_CODE> [options]
@@ -16,6 +17,7 @@ Examples:
     python run_stage4_comp.py AZ
     python run_stage4_comp.py CA --dot-unit 25 --cong-plan "ca_cong_2022"
     python run_stage4_comp.py TX --acs-year 2022 --leg-plan "tx_leg_2021"
+    python run_stage4_comp.py LA --show-stats
 
 Inputs:
   - outputs/<state>/<state>_precinct_all_pop_<year>.geojson (from Stage 2)
@@ -23,19 +25,22 @@ Inputs:
   - inputs/tiger_2020/<state>_bg/tl_2020_<fips>_bg.shp (TIGER block groups)
   - inputs/plans/<state>/<cong_plan>/<plan_file>.shp
   - inputs/plans/<state>/<leg_plan>/<plan_file>.shp
+  - outputs/assignments.json (from Stage 2)
 
 Outputs:
   - Interactive matplotlib visualization
+  - District statistics tables (if --show-stats enabled)
 """
 
 import sys
 sys.setrecursionlimit(10000)  # allow deep geometries
 
 import os
+import json
 import pandas as pd
 import matplotlib.pyplot as plt
 import geopandas as gpd
-from typing import Optional
+from typing import Optional, Dict, List
 
 # Force Fiona backend for all reads to avoid geometry issues
 gpd.options.io_engine = "fiona"
@@ -54,14 +59,14 @@ PLOT_CRS = "EPSG:3857"   # web-mercator for nicer plots
 
 # High-contrast dot colors (must match Stage 3)
 DOT_COLORS = {
-    "white":       "#d9d9d9",
-    "black":       "#000000", 
-    "asian":       "#377eb8",
-    "hispanic":    "#e41a1c",
-    "native":      "#4daf4a",
-    "nhpi":        "#ff7f00",
-    "other":       "#984ea3",
-    "two_or_more": "#a65628",
+    "white":       "#4daf4a",  # green
+    "black":       "#984ea3",  # purple
+    "asian":       "#377eb8",  # blue
+    "hispanic":    "#ff7f00",  # orange
+    "native":      "#a65628",  # brown
+    "nhpi":        "#a65628",  # brown
+    "other":       "#f781bf",  # pink
+    "two_or_more": "#999999",  # light grey
 }
 
 # ===================== HELPERS =====================
@@ -111,7 +116,7 @@ def add_district_labels(ax, districts_gdf, label_col="DISTRICT"):
         if row.geometry is None or row.geometry.is_empty:
             continue
         centroid = row.geometry.representative_point()
-        ax.text(
+        txt = ax.text(
             centroid.x,
             centroid.y,
             str(row[label_col]),
@@ -122,6 +127,7 @@ def add_district_labels(ax, districts_gdf, label_col="DISTRICT"):
             alpha=0.7,
             weight="bold"
         )
+        txt.set_clip_on(True)
 
 
 def load_dots(state_paths: dict, dot_unit: int, acs_year: int) -> Optional[gpd.GeoDataFrame]:
@@ -232,6 +238,172 @@ def find_plan_file(plans_dir: str, plan_name: str, plan_type: str) -> Optional[s
     return os.path.join(plan_dir, shp_files[0])
 
 
+def compute_district_stats(
+    precincts: gpd.GeoDataFrame,
+    assignments_file: str,
+    plan_id: str,
+    state_abbr: str,
+    acs_year: int
+) -> Optional[pd.DataFrame]:
+    """
+    Compute district-level statistics from precinct data and assignments.
+    
+    Returns DataFrame with columns: district_id, total_pop, median_income, 
+    cvap_total, white_pop, black_pop, hispanic_pop, asian_pop, etc.
+    """
+    # Load assignments
+    if not os.path.exists(assignments_file):
+        print(f"⚠ Assignments file not found: {assignments_file}")
+        return None
+    
+    with open(assignments_file, 'r') as f:
+        all_assignments = json.load(f)
+    
+    # Filter for this plan
+    plan_assignments = [
+        a for a in all_assignments 
+        if a.get('plan_id') == plan_id and a.get('state') == state_abbr.upper()
+    ]
+    
+    if not plan_assignments:
+        print(f"⚠ No assignments found for plan {plan_id}")
+        return None
+    
+    # Create assignments DataFrame
+    assignments_df = pd.DataFrame(plan_assignments)
+    
+    # Merge precincts with assignments
+    precincts_with_district = precincts.merge(
+        assignments_df[['precinct_id', 'district_id']],
+        left_on='UNIQUE_ID',
+        right_on='precinct_id',
+        how='inner'
+    )
+    
+    if precincts_with_district.empty:
+        print(f"⚠ No matching precincts found for plan {plan_id}")
+        return None
+    
+    # Get year suffix for column names
+    year_suffix = str(acs_year)[-2:]
+    
+    # Define demographic columns to aggregate
+    demo_cols = {
+        f'TOT_POP{year_suffix}': 'total_pop',
+        f'WHT_POP{year_suffix}': 'white_pop',
+        f'BLK_POP{year_suffix}': 'black_pop',
+        f'HSP_POP{year_suffix}': 'hispanic_pop',
+        f'ASN_POP{year_suffix}': 'asian_pop',
+        f'AIA_POP{year_suffix}': 'native_pop',
+        f'HPI_POP{year_suffix}': 'nhpi_pop',
+        f'OTH_POP{year_suffix}': 'other_pop',
+        f'2OM_POP{year_suffix}': 'two_or_more_pop',
+        f'WHT_CVAP{year_suffix}': 'white_cvap',
+        f'BLK_CVAP{year_suffix}': 'black_cvap',
+        f'HSP_CVAP{year_suffix}': 'hispanic_cvap',
+        f'ASN_CVAP{year_suffix}': 'asian_cvap',
+    }
+    
+    # Filter to only columns that exist
+    available_cols = {k: v for k, v in demo_cols.items() if k in precincts_with_district.columns}
+    
+    # Group by district and sum
+    agg_dict = {col: 'sum' for col in available_cols.keys()}
+    
+    # Add total households if available
+    households_col = f'TOT_HOUS{year_suffix}'
+    if households_col in precincts_with_district.columns:
+        agg_dict[households_col] = 'sum'
+    
+    district_stats = precincts_with_district.groupby('district_id').agg(agg_dict).reset_index()
+    
+    # Rename columns
+    for old_col, new_col in available_cols.items():
+        if old_col in district_stats.columns:
+            district_stats.rename(columns={old_col: new_col}, inplace=True)
+    
+    # Rename households column
+    if households_col in district_stats.columns:
+        district_stats.rename(columns={households_col: 'total_households'}, inplace=True)
+    
+    # Add election results if available
+    election_cols = [col for col in precincts_with_district.columns if col.startswith('G') and any(yr in col for yr in ['20', '22', '24'])]
+    if election_cols:
+        election_agg = precincts_with_district.groupby('district_id')[election_cols].sum().reset_index()
+        district_stats = district_stats.merge(election_agg, on='district_id', how='left')
+    
+    # Calculate total CVAP
+    cvap_cols = [col for col in district_stats.columns if col.endswith('_cvap')]
+    if cvap_cols:
+        district_stats['cvap_total'] = district_stats[cvap_cols].sum(axis=1)
+    
+    # Sort by district_id
+    district_stats = district_stats.sort_values('district_id')
+    
+    return district_stats
+
+
+def print_district_stats(stats: pd.DataFrame, plan_name: str):
+    """Print district statistics in a formatted table."""
+    if stats is None or stats.empty:
+        return
+    
+    # Check for election results
+    election_cols = [col for col in stats.columns if col.startswith('G') and any(yr in col for yr in ['20', '22', '24'])]
+    has_elections = len(election_cols) > 0
+    
+    print(f"\n{'='*140 if has_elections else '='*120}")
+    print(f"District Statistics for {plan_name}")
+    print(f"{'='*140 if has_elections else '='*120}")
+    
+    # Print header
+    if has_elections:
+        # Find party columns (match actual patterns like G24PREDHAR, G24PRERTRU)
+        dem_cols = [col for col in election_cols if 'DHAR' in col or 'DEM' in col.upper()]
+        rep_cols = [col for col in election_cols if 'RTRU' in col or 'REP' in col.upper() or 'TRU' in col]
+        print(f"{'District':<10} {'Total Pop':>12} {'Households':>12} {'CVAP':>12} {'White %':>9} {'Black %':>9} {'Hisp %':>9} {'Asian %':>9} {'Dem Votes':>12} {'Rep Votes':>12}")
+    else:
+        print(f"{'District':<10} {'Total Pop':>12} {'Households':>12} {'CVAP':>12} {'White %':>9} {'Black %':>9} {'Hispanic %':>10} {'Asian %':>10}")
+    print(f"{'-'*140 if has_elections else '-'*120}")
+    
+    # Print each district
+    for _, row in stats.iterrows():
+        district = row['district_id']
+        if district == -1:
+            district = "ZZZ"
+        
+        total_pop = int(row.get('total_pop', 0))
+        total_households = int(row.get('total_households', 0))
+        cvap = int(row.get('cvap_total', 0))
+        
+        # Calculate percentages
+        white_pct = (row.get('white_pop', 0) / total_pop * 100) if total_pop > 0 else 0
+        black_pct = (row.get('black_pop', 0) / total_pop * 100) if total_pop > 0 else 0
+        hispanic_pct = (row.get('hispanic_pop', 0) / total_pop * 100) if total_pop > 0 else 0
+        asian_pct = (row.get('asian_pop', 0) / total_pop * 100) if total_pop > 0 else 0
+        
+        if has_elections:
+            dem_votes = int(sum(row.get(col, 0) for col in dem_cols))
+            rep_votes = int(sum(row.get(col, 0) for col in rep_cols))
+            print(f"{str(district):<10} {total_pop:>12,} {total_households:>12,} {cvap:>12,} {white_pct:>8.1f}% {black_pct:>8.1f}% {hispanic_pct:>8.1f}% {asian_pct:>8.1f}% {dem_votes:>12,} {rep_votes:>12,}")
+        else:
+            print(f"{str(district):<10} {total_pop:>12,} {total_households:>12,} {cvap:>12,} {white_pct:>8.1f}% {black_pct:>8.1f}% {hispanic_pct:>9.1f}% {asian_pct:>9.1f}%")
+    
+    # Print totals
+    print(f"{'-'*140 if has_elections else '-'*120}")
+    total_pop_all = int(stats['total_pop'].sum())
+    total_cvap_all = int(stats.get('cvap_total', pd.Series([0])).sum())
+    total_households_all = int(stats.get('total_households', pd.Series([0])).sum())
+    
+    if has_elections:
+        total_dem = int(sum(stats[col].sum() for col in dem_cols))
+        total_rep = int(sum(stats[col].sum() for col in rep_cols))
+        print(f"{'TOTAL':<10} {total_pop_all:>12,} {total_households_all:>12,} {total_cvap_all:>12,} {'':>9} {'':>9} {'':>9} {'':>9} {total_dem:>12,} {total_rep:>12,}")
+    else:
+        print(f"{'TOTAL':<10} {total_pop_all:>12,} {total_households_all:>12,} {total_cvap_all:>12,}")
+    print(f"{'='*140 if has_elections else '='*120}\n")
+
+
 def main():
     """Main function that processes command line arguments and runs the stage."""
     # Parse command line arguments
@@ -263,6 +435,12 @@ def main():
         "--sldu-plan", 
         type=str,
         help="State Legislative Upper plan directory name (auto-detect if not specified)"
+    )
+    
+    parser.add_argument(
+        "--show-stats",
+        action="store_true",
+        help="Display district-level statistics (population, income, CVAP)"
     )
 
     args = parser.parse_args()
@@ -356,6 +534,54 @@ def main():
     if cong is None and not leg_plans:
         print("⚠ No redistricting plans found. Visualization will only show demographics.")
 
+    # 4a. Compute and display district statistics if requested
+    if args.show_stats:
+        assignments_file = os.path.join(
+            os.path.dirname(state_paths["state_output_dir"]),
+            "assignments.json"
+        )
+        plans_file = os.path.join(
+            os.path.dirname(state_paths["state_output_dir"]),
+            "plans.json"
+        )
+        
+        # Load plans metadata to get plan IDs
+        plan_metadata = {}
+        if os.path.exists(plans_file):
+            with open(plans_file, 'r') as f:
+                all_plans = json.load(f)
+                for plan in all_plans:
+                    if plan.get('state') == state_info['abbr'].upper():
+                        plan_metadata[plan.get('chamber', '').lower()] = {
+                            'plan_id': plan['plan_id'],
+                            'name': plan['name']
+                        }
+        
+        # Compute stats for congressional plan
+        if cong is not None and 'cong' in plan_metadata:
+            stats = compute_district_stats(
+                precincts,
+                assignments_file,
+                plan_metadata['cong']['plan_id'],
+                state_info['abbr'],
+                state_paths['acs_year']
+            )
+            if stats is not None:
+                print_district_stats(stats, plan_metadata['cong']['name'])
+        
+        # Compute stats for legislative plans
+        for chamber in leg_plans.keys():
+            if chamber in plan_metadata:
+                stats = compute_district_stats(
+                    precincts,
+                    assignments_file,
+                    plan_metadata[chamber]['plan_id'],
+                    state_info['abbr'],
+                    state_paths['acs_year']
+                )
+                if stats is not None:
+                    print_district_stats(stats, plan_metadata[chamber]['name'])
+
     # 5. Reproject for plotting
     bg_plot = prep_for_plot(bg)
     precincts_plot = prep_for_plot(precincts)
@@ -363,123 +589,138 @@ def main():
     leg_plots = {chamber: prep_for_plot(plan) for chamber, plan in leg_plans.items()}
     dots_plot = prep_for_plot(dots)
 
-    # 6. Create figure - determine number of subplots
-    num_plots = 0
-    if cong is not None:
-        num_plots += 1
-    num_plots += len(leg_plans)
+    # 6. Create separate figure windows for each map type
+    # This provides the best zoom/pan experience
     
-    if num_plots == 0:
-        # No plans, just show base
-        fig, axes = plt.subplots(1, 1, figsize=(10, 8), constrained_layout=True)
-        axes = [axes]
-    elif num_plots == 1:
-        fig, axes = plt.subplots(1, 1, figsize=(10, 8), constrained_layout=True)
-        axes = [axes]
-    elif num_plots == 2:
-        fig, axes = plt.subplots(1, 2, figsize=(16, 8), constrained_layout=True, sharex=True, sharey=True)
-    elif num_plots == 3:
-        fig, axes = plt.subplots(1, 3, figsize=(24, 8), constrained_layout=True, sharex=True, sharey=True)
-    else:
-        # More than 3, use grid
-        ncols = min(3, num_plots)
-        nrows = (num_plots + ncols - 1) // ncols
-        fig, axes = plt.subplots(nrows, ncols, figsize=(8*ncols, 8*nrows), constrained_layout=True, sharex=True, sharey=True)
-        axes = axes.flatten() if num_plots > 1 else [axes]
-
     def draw_base(ax):
         """Draw the base layers (block groups, precincts, dots)."""
-        # Block group boundaries – light, dashed
-        bg_plot.boundary.plot(
-            ax=ax,
-            linewidth=0.2,
-            edgecolor="#cccccc",
-            linestyle="--",
-            alpha=0.7,
-            zorder=1,
-        )
-        # Precinct boundaries – darker, solid
+        # Block group boundaries – hidden
+        # (no plot)
+        # Precinct boundaries – thinner, dark brown, solid
         precincts_plot.boundary.plot(
             ax=ax,
-            linewidth=0.4,
-            edgecolor="#666666",
-            alpha=0.8,
+            linewidth=1.25,
+            edgecolor="#5C4033",  # dark brown
+            alpha=0.85,
             zorder=2,
         )
         # Dots
         plot_dots(ax, dots_plot)
 
-    # Plot based on available plans
-    plot_idx = 0
-    
-    # Draw congressional plan
+    # Draw congressional plan in separate window
     if cong_plot is not None:
-        ax = axes[plot_idx]
-        ax.set_title(
-            f"{state_info['name']}: BG (dashed) + Precincts (solid) + Dots + Congressional Districts",
-            fontsize=11,
+        fig_cong = plt.figure(figsize=(14, 12))
+        ax_cong = fig_cong.add_subplot(111)
+        ax_cong.set_title(
+            f"{state_info['name']}: Congressional Districts",
+            fontsize=14,
         )
-        draw_base(ax)
+        draw_base(ax_cong)
         cong_plot.boundary.plot(
-            ax=ax,
-            linewidth=1.5,
+            ax=ax_cong,
+            linewidth=2.0,
             edgecolor="red",
-            alpha=0.9,
+            alpha=0.95,
             zorder=4,
         )
-        add_district_labels(ax, cong_plot, "DISTRICT")
-        ax.set_axis_off()
-        plot_idx += 1
+        add_district_labels(ax_cong, cong_plot, "DISTRICT")
+        ax_cong.set_axis_off()
+        
+        # Add legend
+        from matplotlib.lines import Line2D
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Line2D([0], [0], color='red', linewidth=2, label='Districts'),
+            Line2D([0], [0], color='#5C4033', linewidth=1.25, label='Precincts'),
+            Patch(facecolor='#984ea3', label='Black'),
+            Patch(facecolor='#ff7f00', label='Hispanic'),
+            Patch(facecolor='#4daf4a', label='White'),
+            Patch(facecolor='#377eb8', label='Asian'),
+        ]
+        ax_cong.legend(handles=legend_elements, loc='lower right', fontsize=8, framealpha=0.95, bbox_to_anchor=(1.0, -0.15))
+        
+        # Set extent
+        minx, miny, maxx, maxy = bg_plot.total_bounds
+        ax_cong.set_xlim(minx, maxx)
+        ax_cong.set_ylim(miny, maxy)
+        fig_cong.tight_layout()
 
-    # Draw legislative plans
+    # Draw legislative plans in separate windows
     chamber_names = {
-        'sldl': 'State Legislative Lower',
-        'sldu': 'State Legislative Upper',
-        'sl': 'State Legislative'
+        'sldl': 'State House (SLDL)',
+        'sldu': 'State Senate (SLDU)',
+        'sl': 'Legislative Districts'
     }
     
     for chamber, leg_plot in leg_plots.items():
         if leg_plot is not None:
-            ax = axes[plot_idx]
+            fig_leg = plt.figure(figsize=(14, 12))
+            ax_leg = fig_leg.add_subplot(111)
             chamber_name = chamber_names.get(chamber, chamber.upper())
-            ax.set_title(
-                f"{state_info['name']}: BG (dashed) + Precincts (solid) + Dots + {chamber_name} Districts",
-                fontsize=11,
+            ax_leg.set_title(
+                f"{state_info['name']}: {chamber_name}",
+                fontsize=14,
             )
-            draw_base(ax)
+            draw_base(ax_leg)
             leg_plot.boundary.plot(
-                ax=ax,
-                linewidth=1.3,
+                ax=ax_leg,
+                linewidth=2.0,
                 edgecolor="blue",
-                alpha=0.9,
+                alpha=0.95,
                 zorder=4,
             )
-            add_district_labels(ax, leg_plot, "DISTRICT")
-            ax.set_axis_off()
-            plot_idx += 1
+            add_district_labels(ax_leg, leg_plot, "DISTRICT")
+            ax_leg.set_axis_off()
+            
+            # Add legend
+            from matplotlib.lines import Line2D
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Line2D([0], [0], color='blue', linewidth=2, label='Districts'),
+                Line2D([0], [0], color='#5C4033', linewidth=1.25, label='Precincts'),
+                Patch(facecolor='#984ea3', label='Black'),
+                Patch(facecolor='#ff7f00', label='Hispanic'),
+                Patch(facecolor='#4daf4a', label='White'),
+                Patch(facecolor='#377eb8', label='Asian'),
+            ]
+            ax_leg.legend(handles=legend_elements, loc='lower right', fontsize=8, framealpha=0.95, bbox_to_anchor=(1.0, -0.15))
+            
+            # Set extent
+            minx, miny, maxx, maxy = bg_plot.total_bounds
+            ax_leg.set_xlim(minx, maxx)
+            ax_leg.set_ylim(miny, maxy)
+            fig_leg.tight_layout()
 
-    # If no plans, just show demographics
-    if num_plots == 0:
-        ax = axes[0]
-        ax.set_title(
-            f"{state_info['name']}: BG (dashed) + Precincts (solid) + Race Dots",
-            fontsize=12,
-        )
-        draw_base(ax)
-        ax.set_axis_off()
-
-    if num_plots > 1:
-        plt.suptitle(
-            f"{state_info['name']} Comparison: BG / Precincts / Dots / Plans",
+    # If no plans, just show demographics in one window
+    if cong is None and not leg_plans:
+        fig_demo = plt.figure(figsize=(14, 12))
+        ax_demo = fig_demo.add_subplot(111)
+        ax_demo.set_title(
+            f"{state_info['name']}: Demographics",
             fontsize=14,
         )
+        draw_base(ax_demo)
+        ax_demo.set_axis_off()
+        
+        # Add legend
+        from matplotlib.lines import Line2D
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Line2D([0], [0], color='#5C4033', linewidth=1.25, label='Precincts'),
+            Patch(facecolor='#984ea3', label='Black'),
+            Patch(facecolor='#ff7f00', label='Hispanic'),
+            Patch(facecolor='#4daf4a', label='White'),
+            Patch(facecolor='#377eb8', label='Asian'),
+        ]
+        ax_demo.legend(handles=legend_elements, loc='lower right', fontsize=8, framealpha=0.95, bbox_to_anchor=(1.0, -0.15))
+        
+        # Set extent
+        minx, miny, maxx, maxy = bg_plot.total_bounds
+        ax_demo.set_xlim(minx, maxx)
+        ax_demo.set_ylim(miny, maxy)
+        fig_demo.tight_layout()
 
-    # Set common extent from block groups
-    minx, miny, maxx, maxy = bg_plot.total_bounds
-    for ax in axes:
-        ax.set_xlim(minx, maxx)
-        ax.set_ylim(miny, maxy)
-
+    # Show all figure windows
     plt.show()
 
     print(f"\n✅ Stage 4 completed! Interactive visualization displayed.")
